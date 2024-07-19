@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>מחשבון עמלות פנסיה - עם עיבוד מספרים משופר</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.9.359/pdf.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: auto; background: #f4f4f4; padding: 20px; }
+        #textInput, #pdfInput, #status, #result, #debugInfo { margin-bottom: 20px; padding: 10px; background-color: #e7f3fe; border: 1px solid #b6d4fe; }
+        #debugInfo { background-color: #fff3cd; border-color: #ffecb5; }
+        textarea { width: 100%; height: 150px; }
+        button { padding: 10px; background-color: #4CAF50; color: white; border: none; cursor: pointer; margin-right: 10px; }
+        button:hover { background-color: #45a049; }
+        pre { white-space: pre-wrap; word-wrap: break-word; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: right; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>מחשבון עמלות פנסיה - עם עיבוד מספרים משופר</h1>
+
+        <div id="pdfInput">
+            <h2>טען קובץ PDF או הדבק טקסט:</h2>
+            <input type="file" id="pdfFile" accept=".pdf">
+            <button onclick="processPDF()">עבד PDF</button>
+        </div>
+
+        <div id="textInput">
+            <textarea id="summaryText"></textarea>
+            <button onclick="processText()">עבד טקסט</button>
+        </div>
+
+        <div id="status"></div>
+        <div id="debugInfo"></div>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.9.359/pdf.worker.min.js';
+
+        function updateStatus(message) {
+            document.getElementById('status').innerHTML = message;
+        }
+
+        function updateDebugInfo(message) {
+            document.getElementById('debugInfo').innerHTML += `<p>${message}</p>`;
+        }
+
+        function processPDF() {
+            const fileInput = document.getElementById('pdfFile');
+            const file = fileInput.files[0];
+            if (!file) {
+                updateStatus('אנא בחר קובץ PDF');
+                return;
+            }
+            if (file.type !== 'application/pdf') {
+                updateStatus('אנא בחר קובץ PDF תקין');
+                return;
+            }
+
+            updateStatus('מעבד את הקובץ...');
+            document.getElementById('debugInfo').innerHTML = '';
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const typedarray = new Uint8Array(e.target.result);
+
+                pdfjsLib.getDocument(typedarray).promise.then(function(pdf) {
+                    pdf.getPage(1).then(function(page) {
+                        page.getTextContent().then(function(textContent) {
+                            const text = textContent.items.map(item => item.str).join(' ');
+                            document.getElementById('summaryText').value = text;
+                            processText();
+                        });
+                    });
+                }).catch(function(error) {
+                    console.error('Error: ', error);
+                    updateStatus('אירעה שגיאה בעיבוד הקובץ: ' + error.message);
+                });
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function processText() {
+            const text = document.getElementById('summaryText').value;
+            if (!text) {
+                updateStatus('אנא הדבק טקסט או טען קובץ PDF');
+                return;
+            }
+
+            updateStatus('מעבד את הטקסט...');
+            document.getElementById('debugInfo').innerHTML = '';
+            updateDebugInfo(`<strong>טקסט לעיבוד:</strong><pre>${text}</pre>`);
+            
+            const clients = extractClientsFromText(text);
+            if (clients.length > 0) {
+                calculateAndDisplayResults(clients);
+            } else {
+                updateStatus('לא הצלחנו למצוא מידע על לקוחות בטקסט. אנא בדוק את הטקסט ונסה שוב.');
+            }
+        }
+
+        function extractClientsFromText(text) {
+            const clientRegex = /סיכום פגישה([\s\S]*?)(?=סיכום פגישה|$)/g;
+            const clients = [];
+            let match;
+
+            while ((match = clientRegex.exec(text)) !== null) {
+                const clientText = match[0];
+                const nameMatch = clientText.match(/סיכום פגישה\s*(.+)/);
+                const salaryMatch = clientText.match(/שכר\s*(של)?\s*([\d\s,]+)/i);
+                const savingsMatch = clientText.match(/(צבירה|סכום צבירה|חיסכון)\s*(של)?\s*([\d\s,]+)/i);
+
+                updateDebugInfo(`<strong>מידע שזוהה:</strong>`);
+                updateDebugInfo(`שם: ${nameMatch ? nameMatch[1] : 'לא זוהה'}`);
+                updateDebugInfo(`שכר: ${salaryMatch ? salaryMatch[2] : 'לא זוהה'}`);
+                updateDebugInfo(`צבירה: ${savingsMatch ? savingsMatch[3] : 'לא זוהה'}`);
+
+                if (nameMatch && (salaryMatch || savingsMatch)) {
+                    const client = {
+                        name: nameMatch[1].trim(),
+                        salary: salaryMatch ? parseFloat(salaryMatch[2].replace(/[\s,]/g, '')) : null,
+                        savings: savingsMatch ? parseFloat(savingsMatch[3].replace(/[\s,]/g, '')) : null
+                    };
+                    clients.push(client);
+                    updateDebugInfo(`לקוח נוסף: ${client.name}, שכר: ${client.salary}, צבירה: ${client.savings}`);
+                }
+            }
+
+            return clients;
+        }
+
+        function calculateAndDisplayResults(clients) {
+            let totalAnnualCommission = 0;
+            let totalSavingsCommission = 0;
+            let resultHTML = '<h3>תוצאות החישוב:</h3><table><tr><th>שם הלקוח</th><th>שכר חודשי</th><th>סכום צבירה</th><th>עמלת היקף שנתית</th><th>עמלה מצבירה</th><th>סה"כ עמלה</th></tr>';
+
+            clients.forEach(client => {
+                const percentage = 20.83; // ברירת מחדל
+                const annualContribution = client.salary ? client.salary * 12 * (percentage / 100) : 0;
+                const annualCommission = annualContribution * 0.1;
+                const savingsCommission = client.savings ? client.savings * 0.002 : 0;
+                const totalCommission = annualCommission + savingsCommission;
+
+                totalAnnualCommission += annualCommission;
+                totalSavingsCommission += savingsCommission;
+
+                resultHTML += `
+                    <tr>
+                        <td>${client.name}</td>
+                        <td>${client.salary ? client.salary.toLocaleString() : 'לא נמצא'} ₪</td>
+                        <td>${client.savings ? client.savings.toLocaleString() : 'לא נמצא'} ₪</td>
+                        <td>${annualCommission.toLocaleString()} ₪</td>
+                        <td>${savingsCommission.toLocaleString()} ₪</td>
+                        <td>${totalCommission.toLocaleString()} ₪</td>
+                    </tr>
+                `;
+            });
+
+            const totalCommission = totalAnnualCommission + totalSavingsCommission;
+            resultHTML += `
+                <tr>
+                    <th colspan="3">סה"כ</th>
+                    <th>${totalAnnualCommission.toLocaleString()} ₪</th>
+                    <th>${totalSavingsCommission.toLocaleString()} ₪</th>
+                    <th>${totalCommission.toLocaleString()} ₪</th>
+                </tr>
+            </table>`;
+
+            document.getElementById('result').innerHTML = resultHTML;
+            updateStatus('החישוב הושלם בהצלחה.');
+        }
+    </script>
+</body>
+</html>
